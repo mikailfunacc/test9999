@@ -1,4 +1,4 @@
-local Version = 1.51
+local Version = 1.58
 local Name = "GGPrediction"
 
 Callback.Add("Load", function()
@@ -403,7 +403,47 @@ function Path:CutPath(path, distance)
 		distance = distance - dist
 	end
 	return #result > 0 and result or { path[#path] }
+end  
+function Path:CutPath2(path, distance, endPoint)
+    local result = {}
+    if distance <= 0 then
+        return path
+    end
+    for i = 1, #path - 1 do
+        local a, b = path[i], path[i + 1]
+        local dist = Math:GetDistance(a, b)
+        if dist > distance then
+            table_insert(result, Math:Extended(a, Math:Normalized(b, a), distance))
+            for j = i + 1, #path do
+                table_insert(result, path[j])
+            end
+			distance=0
+            break
+        end
+        distance = distance - dist
+    end
+    
+    -- Check if there's still some distance left and if endPoint is provided
+    if distance > 0 and endPoint then
+        local lastPoint = result[#result] or path[#path]
+        local distanceToEnd = Math:GetDistance(lastPoint, endPoint)
+        
+        -- If the distance to the endPoint is less than the remaining distance,
+        -- then just add the endPoint to the result
+        if distanceToEnd <= distance-5 then
+            table_insert(result, endPoint)
+        else
+            table_insert(result, Math:Extended(lastPoint, Math:Normalized(endPoint, lastPoint), distance-5))
+        end
+    end
+    
+    return #result > 0 and result or { path[#path] }
 end
+
+
+
+
+
 
 function Path:ReversePath(path)
 	local result = {}
@@ -593,19 +633,20 @@ function ObjectManager:GetAllyHeroes()
 end
 Collision = {}
 
-function Collision:GetCollision(source, castPos, speed, delay, radius, collisionTypes, skipID)
+ function Collision:GetCollision(source, castPos, speed, delay, radius, collisionTypes, skipID)
 	source = Math:Extended(source, Math:Normalized(source, castPos), 75)
 	castPos = Math:Extended(castPos, Math:Normalized(castPos, source), 75)
 	local isWall, collisionObjects, collisionCount = false, {}, 0
 	local objects = {}
 	for i, colType in pairs(collisionTypes) do
 		if colType == COLLISION_MINION then
-			for k = 1, Game.MinionCount() do
-				local unit = Game.Minion(k)
+			local dCheck = Math:GetDistance(source, castPos)
+			local minions = _G.SDK.ObjectManager:GetEnemyMinions(dCheck)
+			for k = 1, #minions do
+				local unit = minions[k]
 				if
 					unit.networkID ~= skipID
 					and ObjectManager:IsValid(unit)
-					and unit.isEnemy
 					and Math:GetDistance(source, Math:Get2D(unit.pos)) < 2000
 				then
 					table_insert(objects, unit)
@@ -644,6 +685,80 @@ function Collision:GetCollision(source, castPos, speed, delay, radius, collision
 		end
 	end
 	return isWall, collisionObjects, collisionCount
+end 
+function Collision:GetCollision2(source, castPos, speed, delay, radius, collisionTypes, skipID)
+	source = Math:Extended(source, Math:Normalized(source, castPos), myHero.boundingRadius)
+	castPos = Math:Extended(castPos, Math:Normalized(castPos, source), 75)
+	local isWall, collisionObjects, collisionCount = false, {}, 0
+	local objects = {}
+	local objects2 = {}
+	for i, colType in pairs(collisionTypes) do
+		if colType == COLLISION_MINION then
+			for k = 1, Game.MinionCount() do
+				local unit = Game.Minion(k)
+				if
+					unit.networkID ~= skipID
+					and ObjectManager:IsValid(unit)
+					and unit.isEnemy
+					and Math:GetDistance(source, Math:Get2D(unit.pos)) < 2000
+				then
+					table_insert(objects, unit)
+				end
+			end
+		elseif colType == COLLISION_ALLYHERO then
+			for k, unit in pairs(ObjectManager:GetAllyHeroes()) do
+				if unit.networkID ~= skipID and Math:GetDistance(source, Math:Get2D(unit.pos)) < 2000 then
+					table_insert(objects, unit)
+				end
+			end
+		elseif colType == COLLISION_ENEMYHERO then
+			for k, unit in pairs(ObjectManager:GetEnemyHeroes()) do
+				if unit.networkID ~= skipID and Math:GetDistance(source, Math:Get2D(unit.pos)) < 2000 then
+					table_insert(objects2, unit)
+				end
+			end
+		end
+	end
+	for i, object in pairs(objects) do
+		local isCol = false
+		local objectPos = Math:Get2D(object.pos)
+		local pointLine, isOnSegment = Math:ClosestPointOnLineSegment(objectPos, source, castPos)
+		if isOnSegment and Math:IsInRange(objectPos, pointLine, radius+ object.boundingRadius) then
+			isCol = true
+		elseif object.pathing.hasMovePath then
+			objectPos = Math:Get2D(object:GetPrediction(speed, delay))
+			pointLine, isOnSegment = Math:ClosestPointOnLineSegment(objectPos, source, castPos)
+			if isOnSegment and Math:IsInRange(objectPos, pointLine, radius + object.boundingRadius) then
+				isCol = true
+			end
+		end
+		if isCol then
+			table_insert(collisionObjects, object)
+			collisionCount = collisionCount + 1
+		end
+	end
+	for i, object in pairs(objects2) do
+		local isCol = false
+		local prjctdpos, uselesscastpos, prjectdtimetohit = Prediction:GetPrediction(
+			object,
+			source,
+			speed,
+			delay,
+			1,
+			true
+		)
+		local objectPos = Math:Get2D(object:GetPrediction(math.huge, prjectdtimetohit)) 
+		local pointLine, isOnSegment = Math:ClosestPointOnLineSegment(objectPos, source, castPos)
+		if isOnSegment and prjctdpos and Math:IsInRange(prjctdpos, pointLine, radius+ object.boundingRadius) then
+			isCol = true			
+		end
+		if isCol then
+			table_insert(collisionObjects, object)
+			collisionCount = collisionCount + 1
+		end
+	end
+	table.sort(collisionObjects, function(a, b) return GetDistance(a.pos, source) < GetDistance(b.pos, source) end)
+	return isWall, collisionObjects, collisionCount
 end
 Prediction = {}
 
@@ -668,6 +783,74 @@ function Prediction:GetPrediction(target, source, speed, delay, radius, isHero)
 			return path3[#path3]
 		end
 		return path[#path]
+	end
+	UnitData:OnPrediction(target)
+	local vis = UnitData.Visible[id]
+	if vis.visible then
+		if GetTickCount() < vis.visibleTick + 0.5 then
+			return nil, nil, -1
+		end
+	elseif GetTickCount() > vis.invisibleTick + 1 then
+		return nil, nil, -1
+	end
+	local wp = UnitData.Waypoints[id]
+	if wp.moving and #wp.path <= 1 then
+		return nil, nil, -1
+	end
+	if not wp.moving then
+		local pos = Math:Get2D(target.pos)
+		return pos, pos, delay + Math:GetDistance(pos, source) / speed
+	end
+ 	if wp.dashing then
+		local pos = wp.pos
+		return pos, pos, delay + Math:GetDistance(pos, source) / speed
+	end 
+	local delay2 = delay + Menu:GetLatency() + Menu:GetExtraDelay()
+	if speed == math_huge then
+		local path = Path:CutPath(wp.path, ms * delay2)
+		local path2 = Path:CutPath(wp.path, (ms * delay2) - radius)
+		return path[1], path2[1], delay
+	end
+	--print(GetDistance(wp.path[2],target.pos))
+	local path, time = Path:GetPredictedPath(source, speed, ms, Path:CutPath(wp.path, ms * delay2))
+	if path then
+
+		local path2 = Path:CutPath2(Path:ReversePath(path), radius, target.pos)
+		--[[ Draw.Circle(Vector(path[#path]), 50, 4, Draw.Color(255, 255, 255, 255))
+		local castps=path2[1]
+		castps.y=target.y
+		Draw.Circle(Vector(castps), 50, 3, Draw.Color(255, 55, 255, 255)) ]]
+		return path[#path], path2[1], delay + Math:GetDistance(path2[1], source) / speed
+	end
+	local p = wp.path[#wp.path]
+
+	--Draw.Circle(Vector(p), 50, 3, Draw.Color(255, 55, 50, 255))
+	return p, p, delay + Math:GetDistance(p, source) / speed
+	--return nil, nil, -1
+end
+function Prediction:GetPrediction2(target, source, speed, delay, radius, isHero)
+	local id, ms = target.networkID, target.ms
+	if not isHero then
+	
+		local hasMovePath = target.pathing.hasMovePath
+		if not hasMovePath then
+			return Math:Get2D(target.pos), Math:Get2D(target.pos), Math:GetDistance(target.pos, source) / speed
+			
+		end
+		local path = Path:GetPath(target)
+		if #path <= 1 then
+			return Math:Get2D(target.pos), Math:Get2D(target.pos), Math:GetDistance(target.pos, source) / speed
+		end
+		local delay2 = delay + Menu:GetLatency() + Menu:GetExtraDelay()
+		local path2 = Path:CutPath(path, ms * delay2)
+		if speed == math_huge then
+			return path2[1], path2[1], Math:GetDistance(target.pos, source) / speed
+		end
+		local path3, time = Path:GetPredictedPath(source, speed, ms, path)
+		if path3 then
+			return path3[#path3],path3[#path3], Math:GetDistance(target.pos, source) / speed
+		end
+		return path[#path],	path[#path], Math:GetDistance(target.pos, source) / speed
 	end
 	UnitData:OnPrediction(target)
 	local vis = UnitData.Visible[id]
@@ -749,14 +932,25 @@ function Prediction:SpellPrediction(args)
 	function c:GetOutput()
 		self.TargetIsHero = self.Target.type == Obj_AI_Hero
 		self.RealRadius = self.UseBoundingRadius and self.Radius + self.Target.boundingRadius or self.Radius
-		self.UnitPosition, self.CastPosition, self.TimeToHit = Prediction:GetPrediction(
-			self.Target,
-			self.Source,
-			self.Speed,
-			self.Delay,
-			self.RealRadius,
-			self.TargetIsHero
-		)
+		if self.TargetIsHero then
+			self.UnitPosition, self.CastPosition, self.TimeToHit = Prediction:GetPrediction(
+				self.Target,
+				self.Source,
+				self.Speed,
+				self.Delay,
+				self.RealRadius,
+				self.TargetIsHero
+			)
+		else
+			self.UnitPosition, self.CastPosition, self.TimeToHit = Prediction:GetPrediction2(
+				self.Target,
+				self.Source,
+				self.Speed,
+				self.Delay,
+				self.RealRadius,
+				self.TargetIsHero
+			)
+		end
 	end
 	function c:HighHitChance(spelltime, attacktime)
 		local wp, path, tick, timer =
@@ -797,11 +991,12 @@ function Prediction:SpellPrediction(args)
 			self.CollisionTypes,
 			self.Target.networkID
 		)
+
 		if isWall or collisionCount > self.MaxCollision then
 			self.CollionableObjects = collisionObjects
 			return true
 		end
-		return false
+		return false	
 	end
 	function c:IsInRange()
 		self.MyHeroPos = Math:Get2D(myHero.pos)
@@ -851,7 +1046,7 @@ function Prediction:SpellPrediction(args)
 			end
 			if self.HitChance == HITCHANCE_NORMAL and self:HighHitChance(spelltime, attacktime) then
 				self.HitChance = HITCHANCE_HIGH
-			end
+			end			
 		end
 		if self.HitChance < hitChance then
 			return false
@@ -859,13 +1054,18 @@ function Prediction:SpellPrediction(args)
 		if self.Range ~= math_huge and not self:IsInRange() then
 			return false
 		end
+
 		if self.Collision and self:IsCollision() then
 			return false
 		end
 		if not Math:VectorsEqual(self.PosTo, Math:Get2D(self.Target.posTo), 50) then
 			return false
 		end
-		if os.clock() - self.StartTime > 0.005 then
+
+--[[ 		if os.clock() - self.StartTime > 0.03 then
+			return false
+		end ]]
+		if os.clock() - self.StartTime > 0.05 then
 			--print("PREDICTION TIMER")
 			return false
 		end
@@ -952,6 +1152,9 @@ function GGPrediction:GetPrediction(target, source, speed, delay, radius)
 end
 function GGPrediction:GetCollision(source, castPos, speed, delay, radius, collisionTypes, skipID)
 	return Collision:GetCollision(source, castPos, speed, delay, radius, collisionTypes, skipID)
+end
+function GGPrediction:GetCollision2(source, castPos, speed, delay, radius, collisionTypes, skipID)
+	return Collision:GetCollision2(source, castPos, speed, delay, radius, collisionTypes, skipID)
 end
 function GGPrediction:SpellPrediction(args)
 	return Prediction:SpellPrediction(args)

@@ -1,4 +1,4 @@
-local __version__ = 3.069
+local __version__ = 3.067
 local __name__ = "GGOrbwalker"
 
 if _G.GGUpdate then
@@ -8,6 +8,7 @@ end
 _G.GGUpdate = {}
 do
 	function GGUpdate:__init()
+
 		self.Callbacks = {}
 	end
 
@@ -600,7 +601,7 @@ FlashHelper = {
 			and not GameIsChatOpen()
 			and GameIsOnTop()
 		then
-			-- print("Flash Helper | Flashing!")
+			print("Flash Helper | Flashing!")
 			self.Timer = GetTickCount()
 			Control.Flash()
 		end
@@ -608,15 +609,11 @@ FlashHelper = {
 
 	IsReady = function(self)
 		local has_flash = false
-		if myHero:GetSpellData(SUMMONER_1).name == "SummonerFlash" or myHero:GetSpellData(SUMMONER_1).name == "SummonerCherryFlash" 
-			or myHero:GetSpellData(SUMMONER_1).name == "Augment_ARAM_FlashySpell"
-		then
+		if myHero:GetSpellData(SUMMONER_1).name == "SummonerFlash" or myHero:GetSpellData(SUMMONER_1).name == "SummonerCherryFlash" then
 			self.FlashSpell = SUMMONER_1
 			has_flash = true
 		end
-		if myHero:GetSpellData(SUMMONER_2).name == "SummonerFlash" or myHero:GetSpellData(SUMMONER_2).name == "SummonerCherryFlash" 
-			or myHero:GetSpellData(SUMMONER_2).name == "Augment_ARAM_FlashySpell"
-		then
+		if myHero:GetSpellData(SUMMONER_2).name == "SummonerFlash" or myHero:GetSpellData(SUMMONER_2).name == "SummonerCherryFlash" then
 			self.FlashSpell = SUMMONER_2
 			has_flash = true
 		end
@@ -1064,7 +1061,10 @@ Menu = {
         self.Target:MenuElement({id = 'SelectedTarget', name = 'Selected Target', value = true})
         self.Target:MenuElement({id = 'OnlySelectedTarget', name = 'Only Selected Target', value = false})
         self.Target:MenuElement({id = 'SortMode' .. myHero.charName, name = 'Sort Mode', value = 1, drop = {'Auto', 'Closest', 'Near Mouse', 'Lowest HP', 'Lowest MaxHP', 'Highest Priority', 'Most Stack', 'Most AD', 'Most AP', 'Less Cast', 'Less Attack'}})
-	end,
+		self.Target:MenuElement({id = 'mindistance', name = 'mindistance', value = 400, min = 100, max = 600, step=25 })
+		self.Target:MenuElement({id = 'maxdistance', name = 'maxdistance', value = 800, min = 100, max = 1500, step=25 })
+		self.Target:MenuElement({id = 'distmultiplier', name = 'distance multiplier', value = 0.5, min = 0, max = 1, step=0.01 })
+    end,
 
     CreateOrbwalker = function(self)
         self.Orbwalker = self.Main:MenuElement({id = 'Orbwalker', name = 'Orbwalker', type = MENU, leftIcon = '/Gamsteron_Orbwalker.png'})
@@ -1461,7 +1461,7 @@ Damage = {
 			local modCrit = 1.0 + (Item:HasItem(args.From, 3031) and 0.3 or 0)
 			args.RawTotal = args.RawTotal * (1.0 + (modCrit * args.From.critChance))
 			if Buff:HasBuff(args.From, "asheqattack") then
-				args.RawTotal = args.RawTotal * (1.05 + 0.05 * level)
+				args.RawTotal = args.RawTotal * (1.025 + 0.075 * level)
 			end
 		end,
 		["Jayce"] = function(args)
@@ -1600,7 +1600,7 @@ Damage = {
 		["Varus"] = function(args)
 			local level = args.From:GetSpellData(_W).level
 			if level > 0 then
-				args.RawMagical = args.RawMagical + (9 * level - 5) + 0.25 * args.From.ap + 0.15 * args.From.bonusDamage
+				args.RawMagical = args.RawMagical + (9 * level - 1) + 0.25 * args.From.ap + 0.15 * args.From.bonusDamage
 			end
 		end,
 		["Viktor"] = function(args)
@@ -2641,7 +2641,7 @@ Data = {
 		end
 
 		for _, AttackReset in ipairs(self.AttackResetsList) do
-			if msg == KEY_UP and  wParam == AttackReset.Key then
+			if wParam == AttackReset.Key then
 				--Add a 600ms cooldown to prevent spamming the reset key
 				if GetTickCount() <= self.AttackResetKeyTimer + 600 then return end
 
@@ -4136,10 +4136,13 @@ if Target.StackBuffs[myHero.charName] then
 end
 
 Target.SortModes = {
-
 	[SORT_AUTO] = function(a, b)
-		local aMultiplier = 1.75 - Target:GetPriority(a) * 0.15
-		local bMultiplier = 1.75 - Target:GetPriority(b) * 0.15
+		local mindist= Menu.Target.mindistance:Value()
+		local maxdist= Menu.Target.maxdistance:Value()
+		local distmultiplier=Menu.Target.distmultiplier:Value()
+		local aMultiplier = 1.75 - (Target:GetPriority(a) * 0.15) +(distmultiplier*(math.max(math.min(a.distance,maxdist),mindist)/math.max(math.min(b.distance,maxdist),mindist)))
+		local bMultiplier = 1.75 - (Target:GetPriority(b) * 0.15) +(distmultiplier*(math.max(math.min(b.distance,maxdist),mindist)/math.max(math.min(a.distance,maxdist),mindist)))
+		
 		local aDef, bDef = 0, 0
 		if Target.CurrentDamage == DAMAGE_TYPE_MAGICAL then
 			local magicPen, magicPenPercent = myHero.magicPen, myHero.magicPenPercent
@@ -4153,6 +4156,8 @@ Target.SortModes = {
 		return (a.health * aMultiplier * ((100 + aDef) / 100)) - a.ap - (a.totalDamage * a.attackSpeed * 2)
 			< (b.health * bMultiplier * ((100 + bDef) / 100)) - b.ap - (b.totalDamage * b.attackSpeed * 2)
 	end,
+	
+	
 
 	[SORT_CLOSEST] = function(a, b)
 		return a.distance < b.distance
@@ -4425,6 +4430,7 @@ Health = {
 				)
 			)
 		end
+
 		-- SPELLS
 		for i = 1, #self.Spells do
 			self.Spells[i]:Tick()
@@ -4922,6 +4928,7 @@ do
 			if Cursor.Step > 0 then
 				return false
 			end
+
 			if not b then
 				if not (Vector(pos):To2D().onScreen) then return false end
 			end
@@ -4985,7 +4992,7 @@ Cursor = {
             self.Keys = key
         else
             self.Keys = { key }  -- store it in a table format for consistency
-		end
+        end
 		self.CursorPos = cursorPos
 		self.CastPos = castPos
 		if self.CastPos ~= nil then
@@ -5080,9 +5087,11 @@ Cursor = {
 		if step == 0 then
 			self:StepReady()
 		elseif step == 1 then
+
 			self:StepWaitForResponse()
 		elseif step == 2 then
 			self:StepSetToCursorPos()
+
 		elseif step == 3 then
 			self:StepWaitForReady()
 		end
@@ -5117,6 +5126,7 @@ Attack = {
 	OnTick = function(self)
 		if Data:CanResetAttack() and Orbwalker.Menu.General.AttackResetting:Value() then
 			self.Reset = true
+			--print('Reset AA Success')
 		end
 		local spell = myHero.activeSpell
 		if
@@ -5207,14 +5217,12 @@ Attack = {
 			return true
 		end
 		if self.CastEndTime > self.LocalStart then
-        	if GameTimer() >= self.ServerStart + self:GetAnimation() - Data:GetLatency() - 0.01 then
+			if self.Reset or GameTimer() >= self.ServerStart + self:GetAnimation() - Data:GetLatency() - 0.01 then
 				return true
-			elseif self.Reset and not self:IsActive() then
-				-- print('Reset AA Success')
-            	return true
 			end
 			return false
 		end
+
 		if GameTimer() < self.LocalStart + 0.2 then
 			return false
 		end
@@ -5325,7 +5333,7 @@ Orbwalker = {
 		if Data:Stop() then
 			return
 		end
-		if myHero.dead or (myHero.charName == "Sion" and Buff:HasBuff(myHero, "sionpassivedelay")) or self.IsNone then
+		if myHero.dead or self.IsNone then
 			return
 		end
 		self:Orbwalk()
